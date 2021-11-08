@@ -66,7 +66,7 @@ class DefaultSource extends RelationProvider
   override def createRelation(sqlContext: SQLContext,
                               optParams: Map[String, String],
                               schema: StructType): BaseRelation = {
-    // Add default options for unspecified read options keys.
+    // Add default options for unspecified read options keys.  读取
     val parameters = translateViewTypesToQueryTypes(optParams)
 
     val path = parameters.get("path")
@@ -134,10 +134,10 @@ class DefaultSource extends RelationProvider
   override def createRelation(sqlContext: SQLContext,
                               mode: SaveMode,
                               optParams: Map[String, String],
-                              df: DataFrame): BaseRelation = {
+                              df: DataFrame): BaseRelation = { // 写入
     val parameters = HoodieWriterUtils.parametersWithWriteDefaults(optParams)
     val translatedOptions = DataSourceWriteOptions.translateSqlOptions(parameters)
-    val dfWithoutMetaCols = df.drop(HoodieRecord.HOODIE_META_COLUMNS.asScala:_*)
+    val dfWithoutMetaCols = df.drop(HoodieRecord.HOODIE_META_COLUMNS.asScala:_*)  // 保证写入前的df 不带 hudi 的元数据, 即spark df中含有hudi元数据字段也是可以写入的？
 
     if (translatedOptions(OPERATION_OPT_KEY).equals(BOOTSTRAP_OPERATION_OPT_VAL)) {
       HoodieSparkSqlWriter.bootstrap(sqlContext, mode, translatedOptions, dfWithoutMetaCols)

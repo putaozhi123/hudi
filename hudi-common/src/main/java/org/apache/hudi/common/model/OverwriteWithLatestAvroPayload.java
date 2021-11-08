@@ -66,6 +66,9 @@ public class OverwriteWithLatestAvroPayload extends BaseAvroPayload
     if (recordBytes.length == 0) {
       return Option.empty();
     }
+    /**
+     * indexedRecord: {"id": 7, "order_id": 1507, "state": 1, "modify_time": "2021-08-22 13:26:37", "ts": 1629609997000, "_hoodie_is_deleted": true}
+     */
     IndexedRecord indexedRecord = HoodieAvroUtils.bytesToAvro(recordBytes, schema);
     if (isDeleteRecord((GenericRecord) indexedRecord)) {
       return Option.empty();
@@ -86,7 +89,7 @@ public class OverwriteWithLatestAvroPayload extends BaseAvroPayload
     if (genericRecord.getSchema().getField(isDeleteKey) == null) {
       return false;
     }
-    Object deleteMarker = genericRecord.get(isDeleteKey);
+    Object deleteMarker = genericRecord.get(isDeleteKey); // _hoodie_is_deleted 的值 true or false
     return (deleteMarker instanceof Boolean && (boolean) deleteMarker);
   }
 
