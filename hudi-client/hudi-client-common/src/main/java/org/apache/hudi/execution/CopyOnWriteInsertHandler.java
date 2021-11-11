@@ -36,6 +36,7 @@ import java.util.Map;
 
 /**
  * Consumes stream of hoodie records from in-memory queue and writes to one or more create-handles.
+ * 从内存队列中消费hoodie记录数据并写入一个或多个create-handle。
  */
 public class CopyOnWriteInsertHandler<T extends HoodieRecordPayload>
     extends BoundedInMemoryQueueConsumer<HoodieInsertValueGenResult<HoodieRecord>, List<WriteStatus>> {
@@ -69,30 +70,43 @@ public class CopyOnWriteInsertHandler<T extends HoodieRecordPayload>
 
   @Override
   public void consumeOneRecord(HoodieInsertValueGenResult<HoodieRecord> payload) {
+    // 插入队列保存的数据会被封装为HoodieInsertValueGenResult
+    // 从封装类型取出HoodieRecord原始数据
     final HoodieRecord insertPayload = payload.record;
     String partitionPath = insertPayload.getPartitionPath();
+    // 获取缓存的writeHandle
     HoodieWriteHandle<?,?,?,?> handle = handles.get(partitionPath);
     if (handle == null) {
       // If the records are sorted, this means that we encounter a new partition path
       // and the records for the previous partition path are all written,
       // so we can safely closely existing open handle to reduce memory footprint.
+      // 前面 handleInsert 创建 FlinkLazyInsertIterable 传入的areRecordsSorted参数为true (参考：org.apache.hudi.table.action.commit.BaseFlinkCommitActionExecutor.handleInsert)
+      // 会被视为之前的partition都写入完毕，关闭缓存的handle
       if (areRecordsSorted) {
         closeOpenHandles();
       }
       // Lazily initialize the handle, for the first time
+      // 创建出新的writeHandle //org.apache.hudi.io.CreateHandleFactory.create 创建 HoodieCreateHandle;
+      // 这里 怎么区别 是创建出 HoodieCreateHandle 还是 HoodieAppendHandle
       handle = writeHandleFactory.create(config, instantTime, hoodieTable,
           insertPayload.getPartitionPath(), idPrefix, taskContextSupplier);
+      // 放入handle缓存中
       handles.put(partitionPath, handle);
     }
-
+    // 如果handle已经写满了
     if (!handle.canWrite(payload.record)) {
       // Handle is full. Close the handle and add the WriteStatus
+      // 写入handle已关闭状态
       statuses.addAll(handle.close());
       // Open new handle
+      // 再创建一个新的handle  //org.apache.hudi.io.CreateHandleFactory.create 创建 HoodieCreateHandle;
       handle = writeHandleFactory.create(config, instantTime, hoodieTable,
           insertPayload.getPartitionPath(), idPrefix, taskContextSupplier);
+      // 放入handle缓存中
       handles.put(partitionPath, handle);
     }
+    // 通过handle写入数据
+    // payload.insertValue为avro格式的数据
     handle.write(insertPayload, payload.insertValue, payload.exception);
   }
 

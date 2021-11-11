@@ -41,18 +41,23 @@ public abstract class AbstractWriteHelper<T extends HoodieRecordPayload, I, K, O
                                       boolean performTagging) {
     try {
       // De-dupe/merge if needed
+      // 输入的记录是否合并重复的 key; 去重调用 org.apache.hudi.table.action.commit.SparkWriteHelper.deduplicateRecords
       I dedupedRecords =
           combineOnCondition(shouldCombine, inputRecords, shuffleParallelism, table);
 
       Instant lookupBegin = Instant.now();
       I taggedRecords = dedupedRecords;
-      if (performTagging) {
+      if (performTagging) { // 代码写死的 为true
         // perform index loop up to get existing location of records
+        // 利用索引给记录打标签
         taggedRecords = tag(dedupedRecords, context, table);
       }
+      // 索引查找的时间
       Duration indexLookupDuration = Duration.between(lookupBegin, Instant.now());
-
+      // 打标签的记录： (HoodieRecord{key=HoodieKey { recordKey=20da818a-b630-4ac5-b99a-a8d66210016c partitionPath=2016/03/15}, currentLocation='null', newLocation='null'},Optional.absent())
+      // 然后进入 org.apache.hudi.table.action.commit.BaseSparkCommitActionExecutor.execute
       HoodieWriteMetadata<O> result = executor.execute(taggedRecords);
+      // 设置执行耗时
       result.setIndexLookupDuration(indexLookupDuration);
       return result;
     } catch (Throwable e) {

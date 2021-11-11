@@ -116,6 +116,7 @@ public abstract class LazyIterableIterator<I, O> implements Iterable<O>, Iterato
   @Override
   public O next() {
     try {
+      // 遍历数据的时候调用了`computeNext`方法,它位于子类`FlinkLazyInsertIterable`/ SparkLazyInsertIterable
       return computeNext();
     } catch (Exception ex) {
       throw new RuntimeException(ex);

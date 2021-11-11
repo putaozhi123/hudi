@@ -101,12 +101,15 @@ public abstract class BaseFlinkCommitActionExecutor<T extends HoodieRecordPayloa
     HoodieWriteMetadata<List<WriteStatus>> result = new HoodieWriteMetadata<>();
 
     List<WriteStatus> writeStatuses = new LinkedList<>();
+    // 同一个bucket内数据的partition path和fileId是相同的，这里获取第一条record的信息就可以
     final HoodieRecord<?> record = inputRecords.get(0);
     final String partitionPath = record.getPartitionPath();
     final String fileId = record.getCurrentLocation().getFileId();
+    // 指定bucket类型
     final BucketType bucketType = record.getCurrentLocation().getInstantTime().equals("I")
         ? BucketType.INSERT
         : BucketType.UPDATE;
+    // 处理upsert分区逻辑
     handleUpsertPartition(
         instantTime,
         partitionPath,
@@ -114,6 +117,7 @@ public abstract class BaseFlinkCommitActionExecutor<T extends HoodieRecordPayloa
         bucketType,
         inputRecords.iterator())
         .forEachRemaining(writeStatuses::addAll);
+    // 设置写入状态元数据
     setUpWriteMetadata(writeStatuses, result);
     return result;
   }
@@ -177,10 +181,12 @@ public abstract class BaseFlinkCommitActionExecutor<T extends HoodieRecordPayloa
       BucketType bucketType,
       Iterator recordItr) {
     try {
+      // 根据bucketType种类的不同，执行不同的处理操作
       switch (bucketType) {
         case INSERT:
           return handleInsert(fileIdHint, recordItr);
         case UPDATE:
+          // 根据handle种类的不同，执行不同的处理操作
           if (this.writeHandle instanceof HoodieCreateHandle) {
             // During one checkpoint interval, an insert record could also be updated,
             // for example, for an operation sequence of a record:
@@ -251,10 +257,15 @@ public abstract class BaseFlinkCommitActionExecutor<T extends HoodieRecordPayloa
   public Iterator<List<WriteStatus>> handleInsert(String idPfx, Iterator<HoodieRecord<T>> recordItr)
       throws Exception {
     // This is needed since sometimes some buckets are never picked in getPartition() and end up with 0 records
+    // 如果record无数据，返回WriteStatus空集合对应的迭代器
     if (!recordItr.hasNext()) {
       LOG.info("Empty partition");
       return Collections.singletonList((List<WriteStatus>) Collections.EMPTY_LIST).iterator();
     }
+    // 否则返回一个FlinkLazyInsertIterable
+    // `FlinkLazyInsertIterable`是一个延时的迭代器，
+    // 也就是说，只有在遍历`writeStatus`的时候，才会执行数据的插入操作。
+    // 我们看下它是怎么实现的。它的`next`方法位于父类`LazyIterableIterator`中
     return new FlinkLazyInsertIterable<>(recordItr, true, config, instantTime, table, idPfx,
         taskContextSupplier, new ExplicitWriteHandleFactory<>(writeHandle));
   }

@@ -75,6 +75,7 @@ public class HoodieBloomIndexCheckFunction
       List<HoodieKeyLookupHandle.KeyLookupResult> ret = new ArrayList<>();
       try {
         // process one file in each go.
+        // 一个个文件处理
         while (inputItr.hasNext()) {
           Tuple2<String, HoodieKey> currentTuple = inputItr.next();
           String fileId = currentTuple._1;
@@ -83,16 +84,21 @@ public class HoodieBloomIndexCheckFunction
           Pair<String, String> partitionPathFilePair = Pair.of(partitionPath, fileId);
 
           // lazily init state
+          // 初始化Handle
           if (keyLookupHandle == null) {
             keyLookupHandle = new HoodieKeyLookupHandle(config, hoodieTable, partitionPathFilePair);
           }
 
           // if continue on current file
+          // 处理当前文件
           if (keyLookupHandle.getPartitionPathFilePair().equals(partitionPathFilePair)) {
+            // 将recordkey添加
             keyLookupHandle.addKey(recordKey);
           } else {
             // do the actual checking of file & break out
+            // 获取结果
             ret.add(keyLookupHandle.getLookupResult());
+            // 重新生成Handle
             keyLookupHandle = new HoodieKeyLookupHandle(config, hoodieTable, partitionPathFilePair);
             keyLookupHandle.addKey(recordKey);
             break;

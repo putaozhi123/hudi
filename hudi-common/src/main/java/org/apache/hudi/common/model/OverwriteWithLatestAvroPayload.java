@@ -71,6 +71,7 @@ public class OverwriteWithLatestAvroPayload extends BaseAvroPayload
      */
     IndexedRecord indexedRecord = HoodieAvroUtils.bytesToAvro(recordBytes, schema);
     if (isDeleteRecord((GenericRecord) indexedRecord)) {
+      // 如果删除，则该条数据置空
       return Option.empty();
     } else {
       return Option.of(indexedRecord);

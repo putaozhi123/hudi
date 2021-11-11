@@ -34,7 +34,7 @@ public class IteratorBasedQueueProducer<I> implements BoundedInMemoryQueueProduc
 
   // input iterator for producing items in the buffer.
   private final Iterator<I> inputIterator;
-
+  // 生产者为`new IteratorBasedQueueProducer<>(inputItr)`，参数`inputItr`为`HoodieRecord`集合的iterator
   public IteratorBasedQueueProducer(Iterator<I> inputIterator) {
     this.inputIterator = inputIterator;
   }
@@ -43,6 +43,7 @@ public class IteratorBasedQueueProducer<I> implements BoundedInMemoryQueueProduc
   public void produce(BoundedInMemoryQueue<I, ?> queue) throws Exception {
     LOG.info("starting to buffer records");
     while (inputIterator.hasNext()) {
+      // 将`HoodieRecord`集合的元素逐个插入到队列中
       queue.insertRecord(inputIterator.next());
     }
     LOG.info("finished buffering records");

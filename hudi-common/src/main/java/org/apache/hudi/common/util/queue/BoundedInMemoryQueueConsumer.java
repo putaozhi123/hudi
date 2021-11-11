@@ -32,12 +32,13 @@ public abstract class BoundedInMemoryQueueConsumer<I, O> {
    */
   public O consume(BoundedInMemoryQueue<?, I> queue) throws Exception {
     Iterator<I> iterator = queue.iterator();
-
+   // 将队列中的元素逐个取出，传递给子类的`consumeOneRecord`方法; cow 写入 会到 org.apache.hudi.execution.CopyOnWriteInsertHandler.consumeOneRecord
     while (iterator.hasNext()) {
       consumeOneRecord(iterator.next());
     }
 
     // Notifies done
+    // org.apache.hudi.execution.CopyOnWriteInsertHandler.finish
     finish();
 
     return getResult();

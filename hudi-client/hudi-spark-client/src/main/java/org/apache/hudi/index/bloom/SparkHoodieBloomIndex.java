@@ -71,19 +71,24 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
                                               HoodieTable<T, JavaRDD<HoodieRecord<T>>, JavaRDD<HoodieKey>, JavaRDD<WriteStatus>> hoodieTable) {
 
     // Step 0: cache the input record RDD
+    // 根据配置缓存输入记录JavaRDD，避免重复加载开销。
     if (config.getBloomIndexUseCaching()) {
       recordRDD.persist(SparkMemoryUtils.getBloomIndexInputStorageLevel(config.getProps()));
     }
 
     // Step 1: Extract out thinner JavaPairRDD of (partitionPath, recordKey)
+    // 将输入记录JavaRDD转化为JavaPairRDD。(分区路径, hudi记录键)
     JavaPairRDD<String, String> partitionRecordKeyPairRDD =
         recordRDD.mapToPair(record -> new Tuple2<>(record.getPartitionPath(), record.getRecordKey()));
 
     // Lookup indexes for all the partition/recordkey pair
+    // 根据索引查看位置信息，获取JavaPairRDD
+    // 经过lookupIndex方法后只是找出了哪些记录存在于哪些文件，此时在输入记录中还并未有位置信息，需要经过 tagLocationBacktoRecords 将位置信息回推到记录中
     JavaPairRDD<HoodieKey, HoodieRecordLocation> keyFilenamePairRDD =
         lookupIndex(partitionRecordKeyPairRDD, context, hoodieTable);
 
     // Cache the result, for subsequent stages.
+    // 缓存上述结果
     if (config.getBloomIndexUseCaching()) {
       keyFilenamePairRDD.persist(StorageLevel.MEMORY_AND_DISK_SER());
     }
@@ -94,6 +99,7 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
 
     // Step 4: Tag the incoming records, as inserts or updates, by joining with existing record keys
     // Cost: 4 sec.
+    // 将位置信息推回给输入记录后返回
     JavaRDD<HoodieRecord<T>> taggedRecordRDD = tagLocationBacktoRecords(keyFilenamePairRDD, recordRDD);
 
     if (config.getBloomIndexUseCaching()) {
@@ -106,22 +112,29 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
   /**
    * Lookup the location for each record key and return the pair<record_key,location> for all record keys already
    * present and drop the record keys if not present.
+   * 查看索引方法的逻辑，主要分为三步（1. 根据分区路径进行count、2. 加载分区下所有最新的文件、3. 查找包含记录的文件）。
    */
   private JavaPairRDD<HoodieKey, HoodieRecordLocation> lookupIndex(
       JavaPairRDD<String, String> partitionRecordKeyPairRDD, final HoodieEngineContext context,
       final HoodieTable hoodieTable) {
     // Obtain records per partition, in the incoming records
+    // 1. 按照分区路径进行一次count, 如果没有设置分区，则主键为 ""  <"" -> 5>
     Map<String, Long> recordsPerPartition = partitionRecordKeyPairRDD.countByKey();
+    // 获取输入记录的分区
     List<String> affectedPartitionPathList = new ArrayList<>(recordsPerPartition.keySet());
 
     // Step 2: Load all involved files as <Partition, filename> pairs
+    // 2. 加载分区下所有最新的数据文件 <分区，文件名>
     List<Tuple2<String, BloomIndexFileInfo>> fileInfoList =
         loadInvolvedFiles(affectedPartitionPathList, context, hoodieTable);
+    // 按照分区路径先进行分组
     final Map<String, List<BloomIndexFileInfo>> partitionToFileInfo =
         fileInfoList.stream().collect(groupingBy(Tuple2::_1, mapping(Tuple2::_2, toList())));
 
     // Step 3: Obtain a RDD, for each incoming record, that already exists, with the file id,
     // that contains it.
+    // 3. 先计算合适的并行度，然后继续查找包含记录的文件
+    // 会根据之前的最大和最小recordKey过滤不需要进行比较的文件
     JavaRDD<Tuple2<String, HoodieKey>> fileComparisonsRDD =
         explodeRecordRDDWithFileComparisons(partitionToFileInfo, partitionRecordKeyPairRDD);
     Map<String, Long> comparisonsPerFileGroup =
@@ -161,29 +174,38 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
 
   /**
    * Load all involved files as <Partition, filename> pair RDD.
+   * 该方法最核心的逻辑便是获取分区下最新的数据文件。
+   * 若文件ID相同，但是commitTime不同，那么会返回小于指定commitTime，最新提交的文件；
+   * 若文件ID不同，那么返回小于指定commitTime的最新提交文件即可，
+   * 总结而言就是如果同一文件ID对应多个文件，则选取最新的文件。然后根据配置决定是否从文件读取最大最小的recordKey，最大最小recordKey可用于后续过滤不相关的文件，否则会比较分区下所有的文件
    */
   List<Tuple2<String, BloomIndexFileInfo>> loadInvolvedFiles(List<String> partitions, final HoodieEngineContext context,
                                                              final HoodieTable hoodieTable) {
 
     // Obtain the latest data files from all the partitions.
+    // 获取所有分区下最新的文件
     List<Pair<String, String>> partitionPathFileIDList = getLatestBaseFilesForAllPartitions(partitions, context, hoodieTable).stream()
         .map(pair -> Pair.of(pair.getKey(), pair.getValue().getFileId()))
         .collect(toList());
 
     if (config.getBloomIndexPruneByRanges()) {
       // also obtain file ranges, if range pruning is enabled
+      // hoodie.bloom.index.prune.by.ranges配置项为true 范围修剪
       context.setJobStatus(this.getClass().getName(), "Obtain key ranges for file slices (range pruning=on)");
       return context.map(partitionPathFileIDList, pf -> {
         try {
           HoodieRangeInfoHandle rangeInfoHandle = new HoodieRangeInfoHandle(config, hoodieTable, pf);
+          // 从指定文件获取对应的最大和最小recordKey
           String[] minMaxKeys = rangeInfoHandle.getMinMaxKeys();
           return new Tuple2<>(pf.getKey(), new BloomIndexFileInfo(pf.getValue(), minMaxKeys[0], minMaxKeys[1]));
         } catch (MetadataNotFoundException me) {
           LOG.warn("Unable to find range metadata in file :" + pf);
+          // 出错时默认最大和最小recordKey为null
           return new Tuple2<>(pf.getKey(), new BloomIndexFileInfo(pf.getValue()));
         }
       }, Math.max(partitionPathFileIDList.size(), 1));
     } else {
+      // 配置项未开启则默认最大和最小recordKey为null
       return partitionPathFileIDList.stream()
           .map(pf -> new Tuple2<>(pf.getKey(), new BloomIndexFileInfo(pf.getValue()))).collect(toList());
     }
@@ -226,10 +248,12 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
    * <p>
    * Sub-partition to ensure the records can be looked up against files & also prune file<=>record comparisons based on
    * recordKey ranges in the index info.
+   * //该方法 1. 查找需要比对的文件Tuple2<FileID, HoodieKey>
    */
   JavaRDD<Tuple2<String, HoodieKey>> explodeRecordRDDWithFileComparisons(
       final Map<String, List<BloomIndexFileInfo>> partitionToFileIndexInfo,
       JavaPairRDD<String, String> partitionRecordKeyPairRDD) {
+    // 使用索引过滤器，根据之前读取的最大和最小recordKey进行初始化
     IndexFileFilter indexFileFilter =
         config.useBloomIndexTreebasedFilter() ? new IntervalTreeBasedIndexFileFilter(partitionToFileIndexInfo)
             : new ListBasedIndexFileFilter(partitionToFileIndexInfo);
@@ -238,6 +262,7 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
       String recordKey = partitionRecordKeyPair._2();
       String partitionPath = partitionRecordKeyPair._1();
 
+      // 获取匹配的文件，recordKey是否大于最小recordKey和小于最大recordKey
       return indexFileFilter.getMatchingFilesAndPartition(partitionPath, recordKey).stream()
           .map(partitionFileIdPair -> new Tuple2<>(partitionFileIdPair.getRight(),
               new HoodieKey(recordKey, partitionPath)))
@@ -258,8 +283,9 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
       int shuffleParallelism,
       HoodieTable hoodieTable,
       Map<String, Long> fileGroupToComparisons) {
-
+    // hoodie.bloom.index.bucketized.checking = true，默认为true
     if (config.useBloomIndexBucketizedChecking()) {
+      // 2. 使用Partitioner重新分区
       Partitioner partitioner = new BucketizedBloomCheckPartitioner(shuffleParallelism, fileGroupToComparisons,
           config.getBloomIndexKeysPerBucket());
 
@@ -268,7 +294,7 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
     } else {
       fileComparisonsRDD = fileComparisonsRDD.sortBy(Tuple2::_1, true, shuffleParallelism);
     }
-
+    // 3. 使用分区CheckFunction进行处理，然后将处理的结果转化为对应的HoodieKey
     return fileComparisonsRDD.mapPartitionsWithIndex(new HoodieBloomIndexCheckFunction(hoodieTable, config), true)
         .flatMap(List::iterator).filter(lr -> lr.getMatchingRecordKeys().size() > 0)
         .flatMapToPair(lookupResult -> lookupResult.getMatchingRecordKeys().stream()
@@ -283,10 +309,14 @@ public class SparkHoodieBloomIndex<T extends HoodieRecordPayload> extends SparkH
    */
   protected JavaRDD<HoodieRecord<T>> tagLocationBacktoRecords(
       JavaPairRDD<HoodieKey, HoodieRecordLocation> keyFilenamePairRDD, JavaRDD<HoodieRecord<T>> recordRDD) {
+    // 将原始记录（输入记录）进行转化
     JavaPairRDD<HoodieKey, HoodieRecord<T>> keyRecordPairRDD =
         recordRDD.mapToPair(record -> new Tuple2<>(record.getKey(), record));
     // Here as the recordRDD might have more data than rowKeyRDD (some rowKeys' fileId is null),
     // so we do left outer join.
+    // 以HoodieKey进行一次左外连接，确定位置信息
+    // 可以看到通过左外连接便将之前的位置信息推回至原始记录中，这样便完成了对原始记录打位置标签过程。
+    // [(HoodieRecord{key=HoodieKey { recordKey=20da818a-b630-4ac5-b99a-a8d66210016c partitionPath=2016/03/15}, currentLocation='null', newLocation='null'},Optional.absent())]
     return keyRecordPairRDD.leftOuterJoin(keyFilenamePairRDD).values()
         .map(v1 -> HoodieIndexUtils.getTaggedRecord(v1._1, Option.ofNullable(v1._2.orNull())));
   }

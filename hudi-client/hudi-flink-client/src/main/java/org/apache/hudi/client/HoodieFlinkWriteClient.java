@@ -153,19 +153,27 @@ public class HoodieFlinkWriteClient<T extends HoodieRecordPayload> extends
 
   @Override
   public List<WriteStatus> insert(List<HoodieRecord<T>> records, String instantTime) {
+    // 创建HoodieTable
+    // 根据table类型（MOR或COW），创建HoodieFlinkMergeOnReadTable或HoodieFlinkCopyOnWriteTable
     HoodieTable<T, List<HoodieRecord<T>>, List<HoodieKey>, List<WriteStatus>> table =
         getTableAndInitCtx(WriteOperationType.INSERT, instantTime);
+    // 检查要写入数据的schema和table的schema是否匹配
     table.validateUpsertSchema();
+    // 执行预写入操作，给writeClient设置operationType
     preWrite(instantTime, WriteOperationType.INSERT, table.getMetaClient());
     // create the write handle if not exists
+    // 如果HoodieWriteHandle不存在，创建一个
     final HoodieRecord<T> record = records.get(0);
     final boolean isDelta = table.getMetaClient().getTableType().equals(HoodieTableType.MERGE_ON_READ);
     final HoodieWriteHandle<?, ?, ?, ?> writeHandle = getOrCreateWriteHandle(record, isDelta, getConfig(),
         instantTime, table, record.getPartitionPath(), records.listIterator());
+    // 调用table的insert方法，将数据插入
     HoodieWriteMetadata<List<WriteStatus>> result = ((HoodieFlinkTable<T>) table).insert(context, writeHandle, instantTime, records);
+    // 如果记录了索引查找耗时，更新监控仪表盘
     if (result.getIndexLookupDuration().isPresent()) {
       metrics.updateIndexMetrics(LOOKUP_STR, result.getIndexLookupDuration().get().toMillis());
     }
+    // 执行写入后操作，更新监控仪表数据并返回写入状态
     return postWrite(result, instantTime, table);
   }
 
@@ -285,6 +293,8 @@ public class HoodieFlinkWriteClient<T extends HoodieRecordPayload> extends
    * @param recordItr     Record iterator
    * @return Existing write handle or create a new one
    */
+  // table的insert操作逻辑和`writeHandle`的类型有关，所以我们先分析`getOrCreateWriteHandle`方法，
+  // 了解下Hudi会根据表类型和操作类型创建出什么种类的`writeHandle`。
   private HoodieWriteHandle<?, ?, ?, ?> getOrCreateWriteHandle(
       HoodieRecord<T> record,
       boolean isDelta,
@@ -295,20 +305,35 @@ public class HoodieFlinkWriteClient<T extends HoodieRecordPayload> extends
       Iterator<HoodieRecord<T>> recordItr) {
     final HoodieRecordLocation loc = record.getCurrentLocation();
     final String fileID = loc.getFileId();
+    // bucketToHandles保存了file和handle的对应关系
     if (bucketToHandles.containsKey(fileID)) {
+      // 如果找到file对应的handle，获取它
       return bucketToHandles.get(fileID);
     }
     final HoodieWriteHandle<?, ?, ?, ?> writeHandle;
+    /**
+     * 这里Hudi可能创建出的`writeHandle`有如下四种：
+     *
+     * - FlinkCreateHandle：增量写入
+     * - FlinkMergeAndReplaceHandle：增量合并写入（复写旧文件）
+     * - FlinkAppendHandle：追加写入（MOR表）
+     * - FlinkMergeHandle：增量合并写入（滚动写入新文件）
+     */
     if (isDelta) {
+      // 如果表为MERGE_ON_READ类型
+      // 使用FlinkAppendHandle
       writeHandle = new FlinkAppendHandle<>(config, instantTime, table, partitionPath, fileID, recordItr,
           table.getTaskContextSupplier());
     } else if (loc.getInstantTime().equals("I")) {
+      // 如果是新插入的数据，使用FlinkCreateHandle
       writeHandle = new FlinkCreateHandle<>(config, instantTime, table, partitionPath,
           fileID, table.getTaskContextSupplier());
     } else {
+      // 否则使用FlinkMergeHandle
       writeHandle = new FlinkMergeHandle<>(config, instantTime, table, recordItr, partitionPath,
           fileID, table.getTaskContextSupplier());
     }
+    // 加入对应关系中
     this.bucketToHandles.put(fileID, writeHandle);
     return writeHandle;
   }

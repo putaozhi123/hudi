@@ -50,7 +50,8 @@ public class HoodieIndexUtils {
       final HoodieTable hoodieTable) {
     Option<HoodieInstant> latestCommitTime = hoodieTable.getMetaClient().getCommitsTimeline()
         .filterCompletedInstants().lastInstant();
-    if (latestCommitTime.isPresent()) {
+    if (latestCommitTime.isPresent()) { // 存在上一次commit
+      // 获取指定分区下小于指定时间的所有数据文件
       return hoodieTable.getBaseFileOnlyView()
           .getLatestBaseFilesBeforeOrOn(partition, latestCommitTime.get().getTimestamp())
           .collect(toList());

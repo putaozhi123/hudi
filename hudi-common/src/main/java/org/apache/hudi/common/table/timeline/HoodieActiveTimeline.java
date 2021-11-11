@@ -72,6 +72,7 @@ public class HoodieActiveTimeline extends HoodieDefaultTimeline {
       REQUESTED_REPLACE_COMMIT_EXTENSION, INFLIGHT_REPLACE_COMMIT_EXTENSION, REPLACE_COMMIT_EXTENSION));
   private static final Logger LOG = LogManager.getLogger(HoodieActiveTimeline.class);
   protected HoodieTableMetaClient metaClient;
+  // 设定 一个 初始值 -2147483648
   private static AtomicReference<String> lastInstantTime = new AtomicReference<>(String.valueOf(Integer.MIN_VALUE));
 
   /**
@@ -86,6 +87,7 @@ public class HoodieActiveTimeline extends HoodieDefaultTimeline {
    * Returns next instant time that adds N milliseconds in the {@link #COMMIT_FORMATTER} format.
    * Ensures each instant time is atleast 1 second apart since we create instant times at second granularity
    */
+  // 与 上次 lastInstantTime 的值比较，创建一个大于 lastInstantTime 的 newCommitTime
   public static String createNewInstantTime(long milliseconds) {
     return lastInstantTime.updateAndGet((oldVal) -> {
       String newCommitTime;

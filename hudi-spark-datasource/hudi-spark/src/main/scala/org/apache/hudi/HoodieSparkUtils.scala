@@ -97,6 +97,7 @@ object HoodieSparkUtils {
   def createRdd(df: DataFrame, avroSchema: Schema, structName: String, recordNamespace: String)
   : RDD[GenericRecord] = {
     // Use the Avro schema to derive the StructType which has the correct nullability information
+    // 使用Avro模式来派生具有正确的可空性信息的StructType
     val dataType = SchemaConverters.toSqlType(avroSchema).dataType.asInstanceOf[StructType]
     val encoder = RowEncoder.apply(dataType).resolveAndBind()
     val deserializer = HoodieSparkUtils.createRowSerDe(encoder)

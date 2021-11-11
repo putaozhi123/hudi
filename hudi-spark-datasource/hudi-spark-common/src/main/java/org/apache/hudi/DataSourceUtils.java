@@ -240,7 +240,7 @@ public class DataSourceUtils {
 
   /**
    * Drop records already present in the dataset.
-   *
+   *  删除已经存在的数据集
    * @param jssc JavaSparkContext
    * @param incomingHoodieRecords HoodieRecords to deduplicate
    * @param writeConfig HoodieWriteConfig
@@ -255,6 +255,7 @@ public class DataSourceUtils {
     } catch (TableNotFoundException e) {
       // this will be executed when there is no hoodie table yet
       // so no dups to drop
+      // 这将在没有 hudi 表时执行
       return incomingHoodieRecords;
     }
   }

@@ -66,6 +66,7 @@ public class BoundedInMemoryExecutor<I, O, E> {
     this.producers = producers;
     this.consumer = consumer;
     // Ensure single thread for each producer thread and one for consumer
+    // 确保每个生产者线程有一个线程，而消费者线程有一个线程
     this.executorService = Executors.newFixedThreadPool(producers.size() + 1);
     this.queue = new BoundedInMemoryQueue<>(bufferLimitInBytes, transformFunction, sizeEstimator);
   }
@@ -82,21 +83,31 @@ public class BoundedInMemoryExecutor<I, O, E> {
    */
   public ExecutorCompletionService<Boolean> startProducers() {
     // Latch to control when and which producer thread will close the queue
+    // 创建CountDownLatch，传入参数为producer个数
+    // 每个producer运行结束都会countDown
+    // 当count数为0的时候表示所有的生产者运行结束，需要关闭内存队列（标记写入结束）
     final CountDownLatch latch = new CountDownLatch(producers.size());
+    // 线程池共producers.size() + 1个线程，满足每个producer和唯一的consumer各一个线程
     final ExecutorCompletionService<Boolean> completionService =
         new ExecutorCompletionService<Boolean>(executorService);
     producers.stream().map(producer -> {
+      // 在新线程中执行生产者逻辑
       return completionService.submit(() -> {
         try {
+          // 此方法为空实现
           preExecute();
+          // 生产者开始向队列生产数据
           producer.produce(queue);
         } catch (Exception e) {
           LOG.error("error producing records", e);
+          // 出现异常，在队列中标记失败
           queue.markAsFailed(e);
           throw e;
         } finally {
           synchronized (latch) {
+            // 生产者完成任务或者出现异常的时候，countDown
             latch.countDown();
+            // 如果count为0，说明所有生产者任务完成，关闭队列
             if (latch.getCount() == 0) {
               // Mark production as done so that consumer will be able to exit
               queue.close();
@@ -116,13 +127,16 @@ public class BoundedInMemoryExecutor<I, O, E> {
     return consumer.map(consumer -> {
       return executorService.submit(() -> {
         LOG.info("starting consumer thread");
+        // 此方法为空实现
         preExecute();
         try {
+          // 消费者开始消费数据 org.apache.hudi.common.util.queue.BoundedInMemoryQueueConsumer.consume
           E result = consumer.consume(queue);
           LOG.info("Queue Consumption is done; notifying producer threads");
           return result;
         } catch (Exception e) {
           LOG.error("error consuming records", e);
+          // 出现异常，在队列中标记失败
           queue.markAsFailed(e);
           throw e;
         }
@@ -132,12 +146,18 @@ public class BoundedInMemoryExecutor<I, O, E> {
 
   /**
    * Main API to run both production and consumption.
+   * `BoundedInMemoryExecutor`是一个生产者消费者模型作业的执行器，
+   * 生产者结果的缓存使用有界内存队列`BoundedInMemoryQueue`。我们从它的`execute`方法开始分析。
+   * `execute`使用线程池，分别启动生产者和消费者作业。然后等待消费者运行完毕，返回结果。
    */
   public E execute() {
     try {
+      // 启动生产者
       ExecutorCompletionService<Boolean> producerService = startProducers();
+      // 启动消费者
       Future<E> future = startConsumer();
       // Wait for consumer to be done
+      // 等待消费者运行完毕，返回结果
       return future.get();
     } catch (Exception e) {
       throw new HoodieException(e);

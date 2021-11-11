@@ -82,30 +82,30 @@ public class SparkDeleteHelper<T extends HoodieRecordPayload,R> extends
 
     try {
       HoodieWriteMetadata result = null;
-      JavaRDD<HoodieKey> dedupedKeys = keys;
+      JavaRDD<HoodieKey> dedupedKeys = keys; // 要删除的键
       final int parallelism = config.getDeleteShuffleParallelism();
-      if (config.shouldCombineBeforeDelete()) {
+      if (config.shouldCombineBeforeDelete()) { // 删除之前合并,去重
         // De-dupe/merge if needed
-        dedupedKeys = deduplicateKeys(keys, table, parallelism);
+        dedupedKeys = deduplicateKeys(keys, table, parallelism); // 需要删除的去重后的hoodieKey
       } else if (!keys.partitions().isEmpty()) {
-        dedupedKeys = keys.repartition(parallelism);
+        dedupedKeys = keys.repartition(parallelism); //
       }
 
       JavaRDD<HoodieRecord<T>> dedupedRecords =
-          dedupedKeys.map(key -> new HoodieRecord(key, new EmptyHoodieRecordPayload()));
+          dedupedKeys.map(key -> new HoodieRecord(key, new EmptyHoodieRecordPayload()));  // 删除的主键位置等全部置空
       Instant beginTag = Instant.now();
-      // perform index loop up to get existing location of records
+      // perform index loop up to get existing location of records  执行索引循环以获取记录的现有位置
       JavaRDD<HoodieRecord<T>> taggedRecords =
-          table.getIndex().tagLocation(dedupedRecords, context, table);
+          table.getIndex().tagLocation(dedupedRecords, context, table); // 已存在的数据需要删除的主键标记为空 ？？？
       Duration tagLocationDuration = Duration.between(beginTag, Instant.now());
 
-      // filter out non existent keys/records
+      // filter out non existent keys/records 过滤掉不存在的
       JavaRDD<HoodieRecord<T>> taggedValidRecords = taggedRecords.filter(HoodieRecord::isCurrentLocationKnown);
       if (!taggedValidRecords.isEmpty()) {
-        result = deleteExecutor.execute(taggedValidRecords);
+        result = deleteExecutor.execute(taggedValidRecords); // 执行删除操作
         result.setIndexLookupDuration(tagLocationDuration);
       } else {
-        // if entire set of keys are non existent
+        // if entire set of keys are non existent 没有要删除的
         deleteExecutor.saveWorkloadProfileMetadataToInflight(new WorkloadProfile(Pair.of(new HashMap<>(), new WorkloadStat())), instantTime);
         result = new HoodieWriteMetadata();
         result.setWriteStatuses(jsc.emptyRDD());

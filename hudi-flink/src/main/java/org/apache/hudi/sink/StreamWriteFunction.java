@@ -262,7 +262,8 @@ public class StreamWriteFunction<K, I, O>
 
     writeClient = new HoodieFlinkWriteClient<>(context, StreamerUtil.getHoodieClientConfig(this.config));
   }
-
+  // 写入逻辑位于`writeFunction`中，但是他们的逻辑看不到。我们查看`writeFunction`的创建过程，在`initWriteFunction`方法中
+  // 该方法中的`writeClient`为`HoodieFlinkWriteClient`。判断`writeOperation`的值，调用`writeClient`对应的处理方法。
   private void initWriteFunction() {
     final String writeOperation = this.config.get(FlinkOptions.OPERATION);
     switch (WriteOperationType.fromValue(writeOperation)) {
@@ -364,17 +365,22 @@ public class StreamWriteFunction<K, I, O>
   @SuppressWarnings("unchecked, rawtypes")
   private void flushBucket(DataBucket bucket) {
     this.currentInstant = this.writeClient.getInflightAndRequestedInstant(this.config.get(FlinkOptions.TABLE_TYPE));
+    // 如果获取不到instant，说明没有输入数据，方法返回
     if (this.currentInstant == null) {
       // in case there are empty checkpoints that has no input data
       LOG.info("No inflight instant when flushing data, cancel.");
       return;
     }
+    // 获取bucket缓存中的HoodieRecord
     List<HoodieRecord> records = bucket.records;
+    // 检查buffer中必须要有数据
     ValidationUtils.checkState(records.size() > 0, "Data bucket to flush has no buffering records");
+    // 根据write.insert.drop.duplicates配置项，决定insert是否去重
     if (config.getBoolean(FlinkOptions.INSERT_DROP_DUPS)) {
       records = FlinkWriteHelper.newInstance().deduplicateRecords(records, (HoodieIndex) null, -1);
     }
     final List<WriteStatus> writeStatus = new ArrayList<>(writeFunction.apply(records, currentInstant));
+    // 构建消息，表示数据已写入
     final BatchWriteSuccessEvent event = BatchWriteSuccessEvent.builder()
         .taskID(taskID)
         .instantTime(currentInstant)
@@ -382,6 +388,7 @@ public class StreamWriteFunction<K, I, O>
         .isLastBatch(false)
         .isEndInput(false)
         .build();
+    // 发送消息给coordinator
     this.eventGateway.sendEventToCoordinator(event);
   }
 

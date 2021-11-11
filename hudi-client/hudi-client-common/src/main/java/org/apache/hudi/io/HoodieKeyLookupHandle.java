@@ -99,10 +99,12 @@ public class HoodieKeyLookupHandle<T extends HoodieRecordPayload, I, K, O> exten
    */
   public void addKey(String recordKey) {
     // check record key against bloom filter of current file & add to possible keys if needed
+    // 布隆过滤器中是否包含该recordKey，布隆过滤器会从文件中反序列化
     if (bloomFilter.mightContain(recordKey)) {
       if (LOG.isDebugEnabled()) {
         LOG.debug("Record key " + recordKey + " matches bloom filter in  " + partitionPathFilePair);
       }
+      // 如果包含则加入候选列表，待进一步确认
       candidateRecordKeys.add(recordKey);
     }
     totalKeysChecked++;
@@ -115,8 +117,9 @@ public class HoodieKeyLookupHandle<T extends HoodieRecordPayload, I, K, O> exten
     if (LOG.isDebugEnabled()) {
       LOG.debug("#The candidate row keys for " + partitionPathFilePair + " => " + candidateRecordKeys);
     }
-
+    // 获取文件ID对应的最新的数据文件
     HoodieBaseFile dataFile = getLatestDataFile();
+    // 对比文件中所有记录和候选列表，找出实际存在的recordKey
     List<String> matchingKeys =
         checkCandidatesAgainstFile(hoodieTable.getHadoopConf(), candidateRecordKeys, new Path(dataFile.getPath()));
     LOG.info(

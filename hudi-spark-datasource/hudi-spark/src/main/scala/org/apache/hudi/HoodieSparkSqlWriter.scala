@@ -68,22 +68,32 @@ private[hudi] object HoodieSparkSqlWriter {
     SparkRDDWriteClient[HoodieRecordPayload[Nothing]], HoodieTableConfig) = {
 
     val sparkContext = sqlContext.sparkContext
+    // 数据写入路径. 如：Some(/tmp/hudi/hudi_order_cow_test/)
     val path = parameters.get("path")
+    // hudi 表名. 如：Some(hudi_order_cow_test)
     val tblNameOp = parameters.get(HoodieWriteConfig.TABLE_NAME)
+    // 异步压缩  asyncCompactionTriggerFn 初始值是None, 因此 asyncCompactionTriggerFnDefined 为 false
     asyncCompactionTriggerFnDefined = asyncCompactionTriggerFn.isDefined
+    // hudi 写入路径或 表名为空则报错
     if (path.isEmpty || tblNameOp.isEmpty) {
       throw new HoodieException(s"'${HoodieWriteConfig.TABLE_NAME}', 'path' must be set.")
     }
+    // hudi 表名, 如 hudi_order_cow_test
     val tblName = tblNameOp.get.trim
+    // hudi 仅支持 org.apache.spark.serializer.KryoSerializer 序列化
     sparkContext.getConf.getOption("spark.serializer") match {
       case Some(ser) if ser.equals("org.apache.spark.serializer.KryoSerializer") =>
       case _ => throw new HoodieException("hoodie only support org.apache.spark.serializer.KryoSerializer as spark.serializer")
     }
+    // hudi 表的类型 COPY_ON_WRITE/ MERGE_ON_READ
     val tableType = HoodieTableType.valueOf(parameters(TABLE_TYPE_OPT_KEY))
+    //  写入类型 INSERT、UPSERT 等
     var operation = WriteOperationType.fromValue(parameters(OPERATION_OPT_KEY))
     // It does not make sense to allow upsert() operation if INSERT_DROP_DUPS_OPT_KEY is true
     // Auto-correct the operation to "insert" if OPERATION_OPT_KEY is set to "upsert" wrongly
     // or not set (in which case it will be set as "upsert" by parametersWithWriteDefaults()) .
+    // 如果是配置了 INSERT_DROP_DUPS_OPT_KEY（hoodie.datasource.write.insert.drop.duplicates），那么允许upsert()操作是没有意义的
+    // 如果 配置了 hoodie.datasource.write.insert.drop.duplicates 并且写入类型为upsert，则写入类型将自动更改为 insert 操作
     if (parameters(INSERT_DROP_DUPS_OPT_KEY).toBoolean &&
       operation == WriteOperationType.UPSERT) {
 
@@ -95,23 +105,33 @@ private[hudi] object HoodieSparkSqlWriter {
     }
 
     val jsc = new JavaSparkContext(sparkContext)
+    // 创建 hudi 表的路径
     val basePath = new Path(path.get)
+    // 创建 instant 时间
     val instantTime = HoodieActiveTimeline.createNewInstantTime()
+    // 获取 hdfs 的文件系统
     val fs = basePath.getFileSystem(sparkContext.hadoopConfiguration)
+    // 表 元数据路径是否存在
     tableExists = fs.exists(new Path(basePath, HoodieTableMetaClient.METAFOLDER_NAME))
+    // 获取 hudi 表的配置，初始为 null; hoodieTableConfigOpt=Option.empty,即为None
     var tableConfig = getHoodieTableConfig(sparkContext, path.get, hoodieTableConfigOpt)
-
+    // 如果是忽略模式并且元数据路径存在，则跳过不执行写入
     if (mode == SaveMode.Ignore && tableExists) {
       log.warn(s"hoodie table at $basePath already exists. Ignoring & not performing actual writes.")
       (false, common.util.Option.empty(), common.util.Option.empty(), hoodieWriteClient.orNull, tableConfig)
     } else {
       // Handle various save modes
+      // 处理多种保存模式,判断是否有不合规范的配置
       handleSaveModes(mode, basePath, tableConfig, tblName, operation, fs)
       // Create the table if not present
+      // 元数据路径不存在
       if (!tableExists) {
         val archiveLogFolder = parameters.getOrElse(
           HoodieTableConfig.HOODIE_ARCHIVELOG_FOLDER_PROP_NAME, "archived")
 
+        // 初始化 表元数据客户端, 根据配置创建元数据路径等
+        // 初始化hoodie元目录和元目录中任何必要的文件(包括hoodie.properties)
+        // HoodieTableMetaClient{basePath='/tmp/hudi/hudi_order_cow_test', metaPath='/tmp/hudi/hudi_order_cow_test/.hoodie', tableType=COPY_ON_WRITE}
         val tableMetaClient = HoodieTableMetaClient.withPropertyBuilder()
           .setTableType(tableType)
           .setTableName(tblName)
@@ -122,10 +142,12 @@ private[hudi] object HoodieSparkSqlWriter {
         tableConfig = tableMetaClient.getTableConfig
       }
 
+      // 根据 cow 或者 mor 获取 提交类型  commit 还是 deltacommit
       val commitActionType = DataSourceUtils.getCommitActionType(operation, tableConfig.getTableType)
 
       // short-circuit if bulk_insert via row is enabled.
       // scalastyle:off
+      // 如果 设置 hoodie.datasource.write.row.writer.enable 且 bulk_insert, 则 走 bulkInsertAsRow 方法然后返回。
       if (parameters(ENABLE_ROW_WRITER_OPT_KEY).toBoolean &&
         operation == WriteOperationType.BULK_INSERT) {
         val (success, commitTime: common.util.Option[String]) = bulkInsertAsRow(sqlContext, parameters, df, tblName,
@@ -135,22 +157,31 @@ private[hudi] object HoodieSparkSqlWriter {
       // scalastyle:on
 
       val (writeResult, writeClient: SparkRDDWriteClient[HoodieRecordPayload[Nothing]]) =
-        if (operation != WriteOperationType.DELETE) {
+        if (operation != WriteOperationType.DELETE) {  // 不是删除
           // register classes & schemas
+          // structName: hudi_order_cow_test_record ; nameSpace:hoodie.hudi_order_cow_test
           val (structName, nameSpace) = AvroConversionUtils.getAvroRecordNameAndNamespace(tblName)
+          // 注册 Kryo 序列化类
           sparkContext.getConf.registerKryoClasses(
             Array(classOf[org.apache.avro.generic.GenericData],
               classOf[org.apache.avro.Schema]))
+          // 将 dataframe的 schema 转化成 avro 的 schema
           val schema = AvroConversionUtils.convertStructTypeToAvroSchema(df.schema, structName, nameSpace)
+          // 注册 avro schema
           sparkContext.getConf.registerAvroSchemas(schema)
           log.info(s"Registered avro schema : ${schema.toString(true)}")
 
           // Convert to RDD[HoodieRecord]
+          // 通过反射找到 键生成器 NonpartitionedKeyGenerator,NonpartitionedAvroKeyGenerator,ComplexKeyGenerator 等
           val keyGenerator = DataSourceUtils.createKeyGenerator(toProperties(parameters))
+          //  df 转化成 RDD[HoodieRecord]
           val genericRecords: RDD[GenericRecord] = HoodieSparkUtils.createRdd(df, schema, structName, nameSpace)
+          // 是否合并 插入去重 或者 upsert
           val shouldCombine = parameters(INSERT_DROP_DUPS_OPT_KEY).toBoolean || operation.equals(WriteOperationType.UPSERT);
+          // 将 RDD[GenericRecord] 转成 RDD[HoodieRecord]
           val hoodieAllIncomingRecords = genericRecords.map(gr => {
             val hoodieRecord = if (shouldCombine) {
+              // 合并,找出排序比较字段,
               val orderingVal = HoodieAvroUtils.getNestedFieldVal(gr, parameters(PRECOMBINE_FIELD_OPT_KEY), false)
                 .asInstanceOf[Comparable[_]]
               DataSourceUtils.createHoodieRecord(gr,
@@ -163,16 +194,18 @@ private[hudi] object HoodieSparkSqlWriter {
           }).toJavaRDD()
 
           // Create a HoodieWriteClient & issue the write.
+          // 创建HoodieWriteClient并发出写入
           val client = hoodieWriteClient.getOrElse(DataSourceUtils.createHoodieClient(jsc, schema.toString, path.get,
             tblName, mapAsJavaMap(parameters - HoodieWriteConfig.HOODIE_AUTO_COMMIT_PROP)
           )).asInstanceOf[SparkRDDWriteClient[HoodieRecordPayload[Nothing]]]
-
+          // 是否异步压缩,cow false
           if (isAsyncCompactionEnabled(client, tableConfig, parameters, jsc.hadoopConfiguration())) {
             asyncCompactionTriggerFn.get.apply(client)
           }
 
           val hoodieRecords =
             if (parameters(INSERT_DROP_DUPS_OPT_KEY).toBoolean) {
+              // 配置 hoodie.datasource.write.insert.drop.duplicates 写入时去重，然后对即将写入的数据去重操作，此处删除的是已存在的相同主键的记录
               DataSourceUtils.dropDuplicates(jsc, hoodieAllIncomingRecords, mapAsJavaMap(parameters))
             } else {
               hoodieAllIncomingRecords
@@ -182,7 +215,9 @@ private[hudi] object HoodieSparkSqlWriter {
             log.info("new batch has no new records, skipping...")
             (true, common.util.Option.empty())
           }
+          // 用指定的动作完成写操作(插入/更新/删除)的新提交时间
           client.startCommitWithTime(instantTime, commitActionType)
+          // 根据不同的写操作(插入/更新/删除) 写入数据
           val writeResult = DataSourceUtils.doWriteOperation(client, hoodieRecords, instantTime, operation)
           (writeResult, client)
         } else {
@@ -359,6 +394,8 @@ private[hudi] object HoodieSparkSqlWriter {
 
   private def handleSaveModes(mode: SaveMode, tablePath: Path, tableConfig: HoodieTableConfig, tableName: String,
                               operation: WriteOperationType, fs: FileSystem): Unit = {
+    // Append 且 元数据路径存在
+    // 已存在的表配置表名和即将写入的表名不一样，则报错
     if (mode == SaveMode.Append && tableExists) {
       val existingTableName = tableConfig.getTableName
       if (!existingTableName.equals(tableName)) {
@@ -367,17 +404,22 @@ private[hudi] object HoodieSparkSqlWriter {
     }
 
     if (operation != WriteOperationType.DELETE) {
+      // 保存模式 设置成 如果数据存在则报错 并且 元数据路径已存在则发生异常
       if (mode == SaveMode.ErrorIfExists && tableExists) {
         throw new HoodieException(s"hoodie table at $tablePath already exists.")
       } else if (mode == SaveMode.Overwrite && tableExists && operation !=  WriteOperationType.INSERT_OVERWRITE_TABLE) {
         // When user set operation as INSERT_OVERWRITE_TABLE,
         // overwrite will use INSERT_OVERWRITE_TABLE operator in doWriteOperation
+        // overwrite 模式且元数据路径存在且类型不是 INSERT_OVERWRITE_TABLE
+        // overwrite将在doWriteOperation中使用INSERT_OVERWRITE_TABLE操作符
         log.warn(s"hoodie table at $tablePath already exists. Deleting existing data & overwriting with new data.")
+        // 删除存在的数据并且把元数据路径改成不存在
         fs.delete(tablePath, true)
         tableExists = false
       }
     } else {
       // Delete Operation only supports Append mode
+      // 删除操作仅支持append模式
       if (mode != SaveMode.Append) {
         throw new HoodieException(s"Append is the only save mode applicable for ${operation.toString} operation")
       }

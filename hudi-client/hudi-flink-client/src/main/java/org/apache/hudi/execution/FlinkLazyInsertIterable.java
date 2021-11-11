@@ -63,15 +63,21 @@ public class FlinkLazyInsertIterable<T extends HoodieRecordPayload> extends Hood
     BoundedInMemoryExecutor<HoodieRecord<T>, HoodieInsertValueGenResult<HoodieRecord>, List<WriteStatus>> bufferedIteratorExecutor =
         null;
     try {
+      // 获取数据的schema
       final Schema schema = new Schema.Parser().parse(hoodieConfig.getSchema());
+      // 创建BoundedInMemoryExecutor，是核心内容，后面分析
+      // 根据 inputItr 初始化生产者的数量; Option.of(getInsertHandler()) 消费者
       bufferedIteratorExecutor =
           new BoundedInMemoryExecutor<>(hoodieConfig.getWriteBufferLimitBytes(), new IteratorBasedQueueProducer<>(inputItr), Option.of(getInsertHandler()), getTransformFunction(schema));
+      // 执行executor。executor的生产者和消费者并发执行，execute方法会等待执行结束后返回
       final List<WriteStatus> result = bufferedIteratorExecutor.execute();
+      // 检查结果不为空，并且executor中积压的数据全部处理完毕
       assert result != null && !result.isEmpty() && !bufferedIteratorExecutor.isRemaining();
       return result;
     } catch (Exception e) {
       throw new HoodieException(e);
     } finally {
+      // 确保executor使用后关闭
       if (null != bufferedIteratorExecutor) {
         bufferedIteratorExecutor.shutdownNow();
       }

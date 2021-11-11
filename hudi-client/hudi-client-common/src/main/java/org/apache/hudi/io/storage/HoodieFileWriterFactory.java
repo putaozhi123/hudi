@@ -56,9 +56,11 @@ public class HoodieFileWriterFactory {
       String instantTime, Path path, HoodieWriteConfig config, Schema schema, HoodieTable hoodieTable,
       TaskContextSupplier taskContextSupplier) throws IOException {
     BloomFilter filter = createBloomFilter(config);
+    // 创建写入 handle 时，将 avro schema 转化为 parquet schema; new AvroSchemaConverter().convert(schema)
+    // hoodie avro格式数据写入支持
     HoodieAvroWriteSupport writeSupport =
         new HoodieAvroWriteSupport(new AvroSchemaConverter().convert(schema), schema, filter);
-
+    // HoodieAvroParquetConfig: 用于在Parquet文件中写入avro记录。
     HoodieAvroParquetConfig parquetConfig = new HoodieAvroParquetConfig(writeSupport, config.getParquetCompressionCodec(),
         config.getParquetBlockSize(), config.getParquetPageSize(), config.getParquetMaxFileSize(),
         hoodieTable.getHadoopConf(), config.getParquetCompressionRatio());

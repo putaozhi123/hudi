@@ -147,14 +147,21 @@ public class SparkRDDWriteClient<T extends HoodieRecordPayload> extends
 
   @Override
   public JavaRDD<WriteStatus> upsert(JavaRDD<HoodieRecord<T>> records, String instantTime) {
+    // 创建HoodieTable
+    // 根据table类型（MOR或COW），创建 HoodieSparkMergeOnReadTable 或 HoodieSparkCopyOnWriteTable
     HoodieTable<T, JavaRDD<HoodieRecord<T>>, JavaRDD<HoodieKey>, JavaRDD<WriteStatus>> table =
         getTableAndInitCtx(WriteOperationType.UPSERT, instantTime);
+    // 检查要写入数据的schema和table的schema是否匹配
     table.validateUpsertSchema();
+    // 执行预写入操作，给writeClient设置operationType
     preWrite(instantTime, WriteOperationType.UPSERT, table.getMetaClient());
+    // 调用table的upsert方法，将数据写入
     HoodieWriteMetadata<JavaRDD<WriteStatus>> result = table.upsert(context, instantTime, records);
+    // 如果记录了索引查找耗时，更新监控仪表盘
     if (result.getIndexLookupDuration().isPresent()) {
       metrics.updateIndexMetrics(LOOKUP_STR, result.getIndexLookupDuration().get().toMillis());
     }
+    // 执行写入后操作，更新监控仪表数据并返回写入状态
     return postWrite(result, instantTime, table);
   }
 

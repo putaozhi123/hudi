@@ -61,12 +61,14 @@ public class HoodieCreateHandle<T extends HoodieRecordPayload, I, K, O> extends 
   private Map<String, HoodieRecord<T>> recordMap;
   private boolean useWriterSchema = false;
 
+  // 来自于 org.apache.hudi.io.CreateHandleFactory.create
   public HoodieCreateHandle(HoodieWriteConfig config, String instantTime, HoodieTable<T, I, K, O> hoodieTable,
                             String partitionPath, String fileId, TaskContextSupplier taskContextSupplier) {
     this(config, instantTime, hoodieTable, partitionPath, fileId, getWriterSchemaIncludingAndExcludingMetadataPair(config),
         taskContextSupplier);
   }
 
+  // new 一个新的handle
   public HoodieCreateHandle(HoodieWriteConfig config, String instantTime, HoodieTable<T, I, K, O> hoodieTable,
                             String partitionPath, String fileId, Pair<Schema, Schema> writerSchemaIncludingAndExcludingMetadataPair,
                             TaskContextSupplier taskContextSupplier) {
@@ -82,6 +84,7 @@ public class HoodieCreateHandle<T extends HoodieRecordPayload, I, K, O> extends 
           new Path(config.getBasePath()), FSUtils.getPartitionPath(config.getBasePath(), partitionPath));
       partitionMetadata.trySave(getPartitionId());
       createMarkerFile(partitionPath, FSUtils.makeDataFileName(this.instantTime, this.writeToken, this.fileId, hoodieTable.getBaseFileExtension()));
+      // 创建 newParquetFileWriter 或者 newHFileFileWriter
       this.fileWriter = HoodieFileWriterFactory.getFileWriter(instantTime, path, hoodieTable, config, writerSchemaWithMetafields, this.taskContextSupplier);
     } catch (IOException e) {
       throw new HoodieInsertException("Failed to initialize HoodieStorageWriter for path " + path, e);
@@ -111,24 +114,55 @@ public class HoodieCreateHandle<T extends HoodieRecordPayload, I, K, O> extends 
   @Override
   public void write(HoodieRecord record, Option<IndexedRecord> avroRecord) {
     Option recordMetadata = record.getData().getMetadata();
+    // 获取数据操作类型，如果是删除类型，avroRecord为空
+//    if (HoodieOperation.isDelete(record.getOperation())) {
+//      avroRecord = Option.empty();
+//    }
     try {
-      if (avroRecord.isPresent()) {
+      if (avroRecord.isPresent()) { // 不为空, 删除操作不写入
+        // 如果是IgnoreRecord类型，不处理
+//        if (avroRecord.get().equals(IGNORE_RECORD)) {
+//          return;
+//        }
         // Convert GenericRecord to GenericRecord with hoodie commit metadata in schema
+        // 为record加入hoodie的meta字段，方便存储元数据信息
         IndexedRecord recordWithMetadataInSchema = rewriteRecord((GenericRecord) avroRecord.get());
+        // 这个地方没看明白明显区别
+        // 字面意思是是否随数据保存Hoodie的元数据信息
+//        if (preserveHoodieMetadata) {
+          // fileWriter根据底层存储类型不同有如下类型：
+          // HoodieParquetWriter
+          // HoodieOrcWriter
+          // HoodieHFileWriter
+          // 将数据写入底层存储中
+//          fileWriter.writeAvro(record.getRecordKey(), recordWithMetadataInSchema);
+//        } else {
+//          fileWriter.writeAvroWithMetadata(recordWithMetadataInSchema, record);
+//        }
+        // 写入元数据信息 org.apache.hudi.io.storage.HoodieParquetWriter.writeAvroWithMetadata
+        // 写入元数据信息 org.apache.hudi.io.storage.HoodieHFileWriter.writeAvroWithMetadata
         fileWriter.writeAvroWithMetadata(recordWithMetadataInSchema, record);
         // update the new location of record, so we know where to find it next
+        // 解除密封状态，record可以被修改
         record.unseal();
+        // 设置record真实写入location
         record.setNewLocation(new HoodieRecordLocation(instantTime, writeStatus.getFileId()));
+        // 密封record，不可再修改
         record.seal();
+        // 数据已写入计数器加1
         recordsWritten++;
+        // 插入数据数量加1
         insertRecordsWritten++;
       } else {
+        // 如果avroRecord为空，代表有数据需要删除，删除数据计数器加1
         recordsDeleted++;
       }
+      // 标记写入成功
       writeStatus.markSuccess(record, recordMetadata);
       // deflate record payload after recording success. This will help users access payload as a
       // part of marking
       // record successful.
+      // 清除record对象携带的数据，视为数据已插入成功
       record.deflate();
     } catch (Throwable t) {
       // Not throwing exception from here, since we don't want to fail the entire job
@@ -171,12 +205,15 @@ public class HoodieCreateHandle<T extends HoodieRecordPayload, I, K, O> extends 
 
   /**
    * Performs actions to durably, persist the current changes and returns a WriteStatus object.
+   * org.apache.hudi.execution.CopyOnWriteInsertHandler#finish()
    */
   @Override
   public List<WriteStatus> close() {
     LOG.info("Closing the file " + writeStatus.getFileId() + " as we are done with all the records " + recordsWritten);
     try {
-
+      // 写入完成，关闭文件 HoodieParquetWriter(没有close 方法) 或者 HoodieHFileWriter;
+      // HoodieParquetWriter 此处 org.apache.parquet.hadoop.ParquetWriter.close？
+      // HoodieHFileWriter 调用的 org.apache.hudi.io.storage.HoodieHFileWriter.close
       fileWriter.close();
 
       HoodieWriteStat stat = new HoodieWriteStat();

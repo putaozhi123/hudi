@@ -106,7 +106,7 @@ public abstract class HoodieLazyInsertIterable<T extends HoodieRecordPayload>
 
   @Override
   protected void end() {}
-
+   // 返回了一个`CopyOnWriteInsertHandler`对象，专用于处理copy on write类型表的Insert操作。
   protected CopyOnWriteInsertHandler getInsertHandler() {
     return new CopyOnWriteInsertHandler(hoodieConfig, instantTime, areRecordsSorted, hoodieTable, idPrefix,
         taskContextSupplier, writeHandleFactory);

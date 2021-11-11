@@ -135,15 +135,19 @@ class DefaultSource extends RelationProvider
                               mode: SaveMode,
                               optParams: Map[String, String],
                               df: DataFrame): BaseRelation = { // 写入
+    // 参数解析,默认参数+ 写入配置参数
     val parameters = HoodieWriterUtils.parametersWithWriteDefaults(optParams)
     val translatedOptions = DataSourceWriteOptions.translateSqlOptions(parameters)
-    val dfWithoutMetaCols = df.drop(HoodieRecord.HOODIE_META_COLUMNS.asScala:_*)  // 保证写入前的df 不带 hudi 的元数据, 即spark df中含有hudi元数据字段也是可以写入的？
-
+    // 移除hudi元数据字段（注：这里 _hoodie_is_deleted 不属于元数据字段）保证写入前的df 不带 hudi 的元数据, 即spark df中含有hudi元数据字段也是可以写入的?(比如一个 spark 读取一个hudi表写入另一个hudi, 会将元数据信息替换掉)
+    val dfWithoutMetaCols = df.drop(HoodieRecord.HOODIE_META_COLUMNS.asScala:_*)
+    // 如果操作类型是 bootstrap 类型
     if (translatedOptions(OPERATION_OPT_KEY).equals(BOOTSTRAP_OPERATION_OPT_VAL)) {
       HoodieSparkSqlWriter.bootstrap(sqlContext, mode, translatedOptions, dfWithoutMetaCols)
     } else {
+      // 核心方法： 写入数据
       HoodieSparkSqlWriter.write(sqlContext, mode, translatedOptions, dfWithoutMetaCols)
     }
+    // 设定一个返回值
     new HoodieEmptyRelation(sqlContext, dfWithoutMetaCols.schema)
   }
 

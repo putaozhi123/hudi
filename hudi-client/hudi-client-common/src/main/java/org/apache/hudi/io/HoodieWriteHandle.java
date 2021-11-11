@@ -152,6 +152,8 @@ public abstract class HoodieWriteHandle<T extends HoodieRecordPayload, I, K, O> 
 
   /**
    * Perform the actual writing of the given record into the backing file.
+   * 这个`write`方法如果需要数据包含错误信息的，会将错误信息写入`writeStatus`中。
+   * 如果没有错误，调用`write(HoodieRecord record, Option<IndexedRecord> insertValue)`方法。此方法位于`HoodieCreateHandle`中。
    */
   public void write(HoodieRecord record, Option<IndexedRecord> avroRecord, Option<Exception> exception) {
     Option recordMetadata = record.getData().getMetadata();
@@ -160,7 +162,7 @@ public abstract class HoodieWriteHandle<T extends HoodieRecordPayload, I, K, O> 
       writeStatus.markFailure(record, exception.get(), recordMetadata);
       LOG.error("Error writing record " + record, exception.get());
     } else {
-      write(record, avroRecord);
+      write(record, avroRecord); // flink 写时0.8.0版本的此方法有误？？？,应调用 org.apache.hudi.io.HoodieCreateHandle.write(org.apache.hudi.common.model.HoodieRecord, org.apache.hudi.common.util.Option<org.apache.avro.generic.IndexedRecord>)
     }
   }
 

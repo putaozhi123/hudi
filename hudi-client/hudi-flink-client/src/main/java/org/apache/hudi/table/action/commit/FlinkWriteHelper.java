@@ -59,6 +59,7 @@ public class FlinkWriteHelper<T extends HoodieRecordPayload,R> extends AbstractW
     return WriteHelperHolder.FLINK_WRITE_HELPER;
   }
 
+  //跟踪`FlinkWriteHelper`的`write`方法。它调用的是`BaseFlinkCommitActionExecutor`的`execute`方法。
   @Override
   public HoodieWriteMetadata<List<WriteStatus>> write(String instantTime, List<HoodieRecord<T>> inputRecords, HoodieEngineContext context,
                                                       HoodieTable<T, List<HoodieRecord<T>>, List<HoodieKey>, List<WriteStatus>> table, boolean shouldCombine, int shuffleParallelism,
@@ -66,8 +67,9 @@ public class FlinkWriteHelper<T extends HoodieRecordPayload,R> extends AbstractW
     try {
       Instant lookupBegin = Instant.now();
       Duration indexLookupDuration = Duration.between(lookupBegin, Instant.now());
-
+      // 调用executor执行数据写入操作
       HoodieWriteMetadata<List<WriteStatus>> result = executor.execute(inputRecords);
+      // 设置执行耗时
       result.setIndexLookupDuration(indexLookupDuration);
       return result;
     } catch (Throwable e) {

@@ -99,6 +99,7 @@ public abstract class BaseSparkCommitActionExecutor<T extends HoodieRecordPayloa
 
   private JavaRDD<HoodieRecord<T>> clusteringHandleUpdate(JavaRDD<HoodieRecord<T>> inputRecordsRDD) {
     if (config.isClusteringEnabled()) {
+      // hoodie.clustering.inline:true 或者 hoodie.clustering.async.enabled: true
       Set<HoodieFileGroupId> fileGroupsInPendingClustering =
           table.getFileSystemView().getFileGroupsInPendingClustering().map(entry -> entry.getKey()).collect(Collectors.toSet());
       UpdateStrategy updateStrategy = (UpdateStrategy)ReflectionUtils
@@ -114,6 +115,7 @@ public abstract class BaseSparkCommitActionExecutor<T extends HoodieRecordPayloa
     HoodieWriteMetadata<JavaRDD<WriteStatus>> result = new HoodieWriteMetadata<>();
     // Cache the tagged records, so we don't end up computing both
     // TODO: Consistent contract in HoodieWriteClient regarding preppedRecord storage level handling
+    // 缓存标记的记录，不重复计算
     if (inputRecordsRDD.getStorageLevel() == StorageLevel.NONE()) {
       inputRecordsRDD.persist(StorageLevel.MEMORY_AND_DISK_SER());
     } else {
@@ -129,9 +131,11 @@ public abstract class BaseSparkCommitActionExecutor<T extends HoodieRecordPayloa
     }
 
     // handle records update with clustering
+    // 对输入的记录重新布局
     JavaRDD<HoodieRecord<T>> inputRecordsRDDWithClusteringUpdate = clusteringHandleUpdate(inputRecordsRDD);
 
     // partition using the insert partitioner
+    // 自定义分区器
     final Partitioner partitioner = getPartitioner(profile);
     JavaRDD<HoodieRecord<T>> partitionedRecords = partition(inputRecordsRDDWithClusteringUpdate, partitioner);
     JavaRDD<WriteStatus> writeStatusRDD = partitionedRecords.mapPartitionsWithIndex((partition, recordItr) -> {
