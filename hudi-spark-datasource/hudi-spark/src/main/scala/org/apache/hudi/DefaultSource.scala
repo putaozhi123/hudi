@@ -67,9 +67,11 @@ class DefaultSource extends RelationProvider
                               optParams: Map[String, String],
                               schema: StructType): BaseRelation = {
     // Add default options for unspecified read options keys.  读取
+    //    读取参数转化，默认查询类型：快照查询
     val parameters = translateViewTypesToQueryTypes(optParams)
-
+    // hudi表的路径
     val path = parameters.get("path")
+    // 读取路径
     val readPathsStr = parameters.get(DataSourceReadOptions.READ_PATHS_OPT_KEY)
     if (path.isEmpty && readPathsStr.isEmpty) {
       throw new HoodieException(s"'path' or '$READ_PATHS_OPT_KEY' or both must be specified.")
@@ -83,12 +85,13 @@ class DefaultSource extends RelationProvider
 
     val tablePath = DataSourceUtils.getTablePath(fs, globPaths.toArray)
     log.info("Obtained hudi table path: " + tablePath)
-
+    // 元数据读取
     val metaClient = HoodieTableMetaClient.builder().setConf(fs.getConf).setBasePath(tablePath).build()
     val isBootstrappedTable = metaClient.getTableConfig.getBootstrapBasePath.isPresent
     log.info("Is bootstrapped table => " + isBootstrappedTable)
-
+    // 快照查询
     if (parameters(QUERY_TYPE_OPT_KEY).equals(QUERY_TYPE_SNAPSHOT_OPT_VAL)) {
+      // mor 类型
       if (metaClient.getTableType.equals(HoodieTableType.MERGE_ON_READ)) {
         if (isBootstrappedTable) {
           // Snapshot query is not supported for Bootstrapped MOR tables
@@ -99,10 +102,13 @@ class DefaultSource extends RelationProvider
           new MergeOnReadSnapshotRelation(sqlContext, optParams, schema, globPaths, metaClient)
         }
       } else {
+        // cow 类型
         getBaseFileOnlyView(sqlContext, parameters, schema, readPaths, isBootstrappedTable, globPaths, metaClient)
       }
+      // 读优化查询
     } else if(parameters(QUERY_TYPE_OPT_KEY).equals(QUERY_TYPE_READ_OPTIMIZED_OPT_VAL)) {
       getBaseFileOnlyView(sqlContext, parameters, schema, readPaths, isBootstrappedTable, globPaths, metaClient)
+      // 增量查询
     } else if (parameters(QUERY_TYPE_OPT_KEY).equals(QUERY_TYPE_INCREMENTAL_OPT_VAL)) {
       val metaClient = HoodieTableMetaClient.builder().setConf(fs.getConf).setBasePath(tablePath).build()
       if (metaClient.getTableType.equals(HoodieTableType.MERGE_ON_READ)) {

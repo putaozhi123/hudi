@@ -137,7 +137,9 @@ public class HoodieHiveClient extends AbstractSyncHoodieClient {
       updateHiveSQL(sql);
     }
   }
-
+  // 批量添加分区 ALTER TABLE hudi.hudi_kafka_t_scd_new_device_monitor_route ADD IF NOT EXISTS
+  //PARTITION (etl_date='2021-10-01') LOCATION '/user/hive/warehouse/hudi.db/hudi_kafka_t_scd_new_device_monitor_route/etl_date=2021-10-01'
+  //PARTITION (etl_date='2021-10-02') LOCATION '/user/hive/warehouse/hudi.db/hudi_kafka_t_scd_new_device_monitor_route/etl_date=2021-10-02'
   private String constructAddPartitions(String tableName, List<String> partitions) {
     StringBuilder alterSQL = new StringBuilder("ALTER TABLE ");
     alterSQL.append(HIVE_ESCAPE_CHARACTER).append(syncConfig.databaseName)
