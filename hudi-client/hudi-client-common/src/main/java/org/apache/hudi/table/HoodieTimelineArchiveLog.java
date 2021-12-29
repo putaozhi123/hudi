@@ -119,6 +119,7 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
    */
   public boolean archiveIfRequired(HoodieEngineContext context) throws IOException {
     try {
+      // 需要通过 getInstantsToArchive获取需要归档的 Instant，然后在进行归档，接着再将 Instant删除
       List<HoodieInstant> instantsToArchive = getInstantsToArchive().collect(Collectors.toList());
 
       boolean success = true;
@@ -137,14 +138,18 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
       close();
     }
   }
-
+  // 获取完成的CLEAN 和 ROLLBACK 类型的timeline
   private Stream<HoodieInstant> getCleanInstantsToArchive() {
+    // 此处的 filterCompletedInstants 好像没有效果,筛选出完成的instant
     HoodieTimeline cleanAndRollbackTimeline = table.getActiveTimeline()
         .getTimelineOfActions(CollectionUtils.createSet(HoodieTimeline.CLEAN_ACTION, HoodieTimeline.ROLLBACK_ACTION)).filterCompletedInstants();
+    // 按照action进行一次排序，并根据最大保留数过滤出需要处理的instant
     return cleanAndRollbackTimeline.getInstants()
         .collect(Collectors.groupingBy(HoodieInstant::getAction)).values().stream()
         .map(hoodieInstants -> {
+          // 每种类型(clean、rollback) 的instant大于30
           if (hoodieInstants.size() > this.maxInstantsToKeep) {
+            // 取前 （hoodieInstants.size() - 20）个 instant，如hoodieInstants.size()为31,这里取前11个instant
             return hoodieInstants.subList(0, hoodieInstants.size() - this.minInstantsToKeep);
           } else {
             return new ArrayList<HoodieInstant>();
@@ -155,7 +160,9 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
   private Stream<HoodieInstant> getCommitInstantsToArchive() {
     // TODO (na) : Add a way to return actions associated with a timeline and then merge/unify
     // with logic above to avoid Stream.concats
+    // 获取所有已完成的instant的timeline
     HoodieTimeline commitTimeline = table.getCompletedCommitsTimeline();
+    // 最早的处于pending的compaction
     Option<HoodieInstant> oldestPendingCompactionInstant =
         table.getActiveTimeline().filterPendingCompactionTimeline().firstInstant();
     Option<HoodieInstant> oldestInflightCommitInstant =
@@ -165,6 +172,7 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
 
     // We cannot have any holes in the commit timeline. We cannot archive any commits which are
     // made after the first savepoint present.
+    // 获取第一个（最早）的savepoint
     Option<HoodieInstant> firstSavepoint = table.getCompletedSavepointTimeline().firstInstant();
     if (!commitTimeline.empty() && commitTimeline.countInstants() > maxInstantsToKeep) {
       // Actually do the commits
@@ -192,16 +200,22 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
   }
 
   private Stream<HoodieInstant> getInstantsToArchive() {
+    // 通过 getInstantsToArchive来获取待归档的所有 Instant;
+    // 获取完成的CLEAN、ROLlBACK类型的timeline 和 获取所有已完成的instant的timeline
     Stream<HoodieInstant> instants = Stream.concat(getCleanInstantsToArchive(), getCommitInstantsToArchive());
 
     // For archiving and cleaning instants, we need to include intermediate state files if they exist
+    // 对于归档和清理 instants，我们需要包含中间状态文件(如果存在的话)
+    // 所有instant组成的timeline(包括各种中间状态的instant)
     HoodieActiveTimeline rawActiveTimeline = new HoodieActiveTimeline(metaClient, false);
+    // 按照时间和action进行分类
     Map<Pair<String, String>, List<HoodieInstant>> groupByTsAction = rawActiveTimeline.getInstants()
         .collect(Collectors.groupingBy(i -> Pair.of(i.getTimestamp(),
             HoodieInstant.getComparableAction(i.getAction()))));
 
     // If metadata table is enabled, do not archive instants which are more recent that the latest synced
     // instant on the metadata table. This is required for metadata table sync.
+    // hoodie.metadata.enable 元数据同步 默认false 如果启用了元数据表，则不要将最近同步的 instant 存档到元数据表中。 这是元数据表同步所必需的
     if (config.useFileListingMetadata()) {
       try (HoodieTableMetadata tableMetadata = HoodieTableMetadata.create(table.getContext(), config.getMetadataConfig(),
           config.getBasePath(), FileSystemViewStorageConfig.DEFAULT_VIEW_SPILLABLE_DIR)) {
@@ -219,19 +233,24 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
         throw new HoodieException("Error limiting instant archival based on metadata table", e);
       }
     }
-
+    // 所有待处理的instant
     return instants.flatMap(hoodieInstant ->
         groupByTsAction.get(Pair.of(hoodieInstant.getTimestamp(),
             HoodieInstant.getComparableAction(hoodieInstant.getAction()))).stream());
   }
 
+  /**
+   * 在归档完后，需要调用 HoodieCommitArchiveLog#deleteArchivedInstants方法来删除Timeline中的已归档的 instant
+   * 可以看到删除 instant的主要逻辑就是删除其对应的文件（包括元数据目录和aux目录）。
+   */
   private boolean deleteArchivedInstants(List<HoodieInstant> archivedInstants) throws IOException {
     LOG.info("Deleting instants " + archivedInstants);
     boolean success = true;
     for (HoodieInstant archivedInstant : archivedInstants) {
       Path commitFile = new Path(metaClient.getMetaPath(), archivedInstant.getFileName());
       try {
-        if (metaClient.getFs().exists(commitFile)) {
+        if (metaClient.getFs().exists(commitFile)) { // 文件存在
+          // 删除
           success &= metaClient.getFs().delete(commitFile, false);
           LOG.info("Archived and deleted instant file " + commitFile);
         }
@@ -241,10 +260,12 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
     }
 
     // Remove older meta-data from auxiliary path too
+    // 获取最后一个instant
     Option<HoodieInstant> latestCommitted = Option.fromJavaOptional(archivedInstants.stream().filter(i -> i.isCompleted() && (i.getAction().equals(HoodieTimeline.COMMIT_ACTION)
         || (i.getAction().equals(HoodieTimeline.DELTA_COMMIT_ACTION)))).max(Comparator.comparing(HoodieInstant::getTimestamp)));
     LOG.info("Latest Committed Instant=" + latestCommitted);
-    if (latestCommitted.isPresent()) {
+    if (latestCommitted.isPresent()) { //存在
+      // 删除aux目录下的文件
       success &= deleteAllInstantsOlderorEqualsInAuxMetaFolder(latestCommitted.get());
     }
     return success;
@@ -296,6 +317,7 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
 
   public void archive(HoodieEngineContext context, List<HoodieInstant> instants) throws HoodieCommitException {
     try {
+      // 获取完成的instant的timeline
       HoodieTimeline commitTimeline = metaClient.getActiveTimeline().getAllCommitsTimeline().filterCompletedInstants();
       Schema wrapperSchema = HoodieArchivedMetaEntry.getClassSchema();
       LOG.info("Wrapper schema " + wrapperSchema.toString());
@@ -308,8 +330,10 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
         }
         try {
           deleteAnyLeftOverMarkerFiles(context, hoodieInstant);
-          records.add(convertToAvroRecord(commitTimeline, hoodieInstant));
+          // 将instant转化为IndexedRecord 此处空文件转化成avro数据就会报错
+          records.add(convertToAvroRecord(commitTimeline, hoodieInstant)); // 归档报错: Failed to archive commits
           if (records.size() >= this.config.getCommitArchivalBatchSize()) {
+            // 写入文件
             writeToFile(wrapperSchema, records);
           }
         } catch (Exception e) {
@@ -319,6 +343,7 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
           }
         }
       }
+      // 写入剩余的records
       writeToFile(wrapperSchema, records);
     } catch (Exception e) {
       throw new HoodieCommitException("Failed to archive commits", e);
@@ -357,10 +382,14 @@ public class HoodieTimelineArchiveLog<T extends HoodieAvroPayload, I, K, O> {
 
   private void writeToFile(Schema wrapperSchema, List<IndexedRecord> records) throws Exception {
     if (records.size() > 0) {
+      // Block头信息
       Map<HeaderMetadataType, String> header = new HashMap<>();
       header.put(HoodieLogBlock.HeaderMetadataType.SCHEMA, wrapperSchema.toString());
+      // 生成Avro Block块
       HoodieAvroDataBlock block = new HoodieAvroDataBlock(records, header);
+      // 添加block块写入文件
       writer.appendBlock(block);
+      // 清空集合
       records.clear();
     }
   }

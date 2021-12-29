@@ -225,6 +225,8 @@ public interface HoodieLogFormat {
       }
 
       if (logVersion == null) {
+        // Computing the next log version for commits in /user/hive/warehouse/hudi.db/xxx/.hoodie/archived
+        // parentPath:/user/hive/warehouse/hudi.db/xxx/.hoodie/archived logFileId: commits fileExtension: .archive
         LOG.info("Computing the next log version for " + logFileId + " in " + parentPath);
         Option<Pair<Integer, String>> versionAndWriteToken =
             FSUtils.getLatestLogVersion(fs, parentPath, logFileId, fileExtension, instantTime);
