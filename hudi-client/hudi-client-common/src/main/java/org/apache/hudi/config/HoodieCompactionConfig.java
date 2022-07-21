@@ -122,6 +122,9 @@ public class HoodieCompactionConfig extends DefaultHoodieConfig {
   private static final String DEFAULT_CLEANER_COMMITS_RETAINED = "10";
   private static final String DEFAULT_MAX_COMMITS_TO_KEEP = "30";
   private static final String DEFAULT_MIN_COMMITS_TO_KEEP = "20";
+
+  public static final String DELETE_ARCHIVED_INSTANT_PARALLELISM_PROP = "hoodie.archive.delete.parallelism";
+  private static final String DEFAULT_DELETE_ARCHIVED_INSTANT_PARALLELISM = String.valueOf(100);
   private static final String DEFAULT_COMMITS_ARCHIVAL_BATCH_SIZE = String.valueOf(10);
   private static final String DEFAULT_CLEANER_BOOTSTRAP_BASE_FILE_ENABLED = "false";
   public static final String TARGET_PARTITIONS_PER_DAYBASED_COMPACTION_PROP =
@@ -309,6 +312,8 @@ public class HoodieCompactionConfig extends DefaultHoodieConfig {
           DEFAULT_MAX_COMMITS_TO_KEEP);
       setDefaultOnCondition(props, !props.containsKey(MIN_COMMITS_TO_KEEP_PROP), MIN_COMMITS_TO_KEEP_PROP,
           DEFAULT_MIN_COMMITS_TO_KEEP);
+      setDefaultOnCondition(props, !props.containsKey(DELETE_ARCHIVED_INSTANT_PARALLELISM_PROP), DELETE_ARCHIVED_INSTANT_PARALLELISM_PROP,
+          DEFAULT_DELETE_ARCHIVED_INSTANT_PARALLELISM);
       setDefaultOnCondition(props, !props.containsKey(PARQUET_SMALL_FILE_LIMIT_BYTES), PARQUET_SMALL_FILE_LIMIT_BYTES,
           DEFAULT_PARQUET_SMALL_FILE_LIMIT_BYTES);
       setDefaultOnCondition(props, !props.containsKey(RECORD_SIZE_ESTIMATION_THRESHOLD_PROP), RECORD_SIZE_ESTIMATION_THRESHOLD_PROP,

@@ -472,6 +472,10 @@ public class HoodieWriteConfig extends DefaultHoodieConfig {
     return Boolean.valueOf(props.getProperty(HoodieCompactionConfig.COMPACTION_REVERSE_LOG_READ_ENABLED_PROP));
   }
 
+  public int getArchiveDeleteParallelism() {
+    return  Integer.parseInt(props.getProperty(HoodieCompactionConfig.DELETE_ARCHIVED_INSTANT_PARALLELISM_PROP));
+  }
+
   public boolean inlineClusteringEnabled() {
     return Boolean.parseBoolean(props.getProperty(HoodieClusteringConfig.INLINE_CLUSTERING_PROP));
   }

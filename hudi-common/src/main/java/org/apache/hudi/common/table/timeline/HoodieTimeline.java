@@ -268,9 +268,11 @@ public interface HoodieTimeline extends Serializable {
    */
   Option<byte[]> getInstantDetails(HoodieInstant instant);
 
+  boolean isEmpty(HoodieInstant instant);
   /**
    * Helper methods to compare instants.
    **/
+
   BiPredicate<String, String> EQUALS = (commit1, commit2) -> commit1.compareTo(commit2) == 0;
   BiPredicate<String, String> GREATER_THAN_OR_EQUALS = (commit1, commit2) -> commit1.compareTo(commit2) >= 0;
   BiPredicate<String, String> GREATER_THAN = (commit1, commit2) -> commit1.compareTo(commit2) > 0;
